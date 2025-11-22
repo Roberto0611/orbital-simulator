@@ -17,4 +17,4 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8001
 
 # 5. Abrir en navegador
-# http://localhost:8000/docs
+# http://localhost:8001/docs
