@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle
 import math
+import json
 from decimal import Decimal
 from scipy.special import jv
 
@@ -10,9 +11,9 @@ from scipy.special import jv
 # Constants (SI Units)
 # -------------------------
 G_CONSTANT = 6.67430e-11
-MASS_SUN = 1.989e30
-RADIUS_SUN = 6.9634e8       # Meters (approx 700,000 km)
-AU = 1.496e11               # Astronomical Unit in meters
+MASS_EARTH = 5.972e24       # kg
+RADIUS_EARTH = 6.371e6      # Meters (approx 6,371 km)
+GEO_RADIUS = 42164e3        # Geostationary orbit radius (approx 42,164 km)
 
 # -------------------------
 # Drag class
@@ -171,8 +172,8 @@ class TrajectoryComputer:
             x, y, vx, vy = self.state
             r = math.hypot(x, y)
 
-            if r <= RADIUS_SUN:
-                print("Meteor collided with the Sun. Object destroyed.")
+            if r <= RADIUS_EARTH:
+                print("Meteor collided with Earth. Object destroyed.")
                 self.destroyed = True
                 return
 
@@ -188,32 +189,27 @@ class TrajectoryComputer:
             "r": np.array(self.r_history),
         }
 
-# -------------------------
-# Animation Service
-# -------------------------
-
-
 def mainKepler():
-    a_axis = 2.0 * AU
-    b_axis = 1.5 * AU
+        # Orbital parameters for an asteroid near Earth
+    # Using a highly elliptical orbit to simulate an incoming object or eccentric satellite
+    a_axis = 50000e3  # 50,000 km semi-major axis
+    b_axis = 30000e3  # 30,000 km semi-minor axis
 
-    drag = DragForce(c_t0=1.5e-7, c_r0=0.0, decay=0.0)
+    drag = DragForce(c_t0=1.5e-6, c_r0=0.0, decay=0.0)
 
-    physics = PhysicsService(G_CONSTANT, MASS_SUN, 0.0)
+    physics = PhysicsService(G_CONSTANT, MASS_EARTH, 0.0)
     solver = BesselAnomalySolver(max_iterations=40)
     sim = TrajectoryComputer(physics, solver, drag)
     sim.set_initial_from_orbital_elements(a_axis, b_axis, start_true_anomaly=0.0)
 
-    dt = 3600.0 * 8
+    # Time step: 60 seconds per step
+    dt = 120.0
 
     try:
-        total_simulation_time = 3600.0 * 24 * 365 * 2
-        steps = int(total_simulation_time / dt)
-
-        for step in range(steps):
+        for step in range(0, 2000):
+            sim.step(dt)
             if sim.destroyed:
                 break
-            sim.step(dt)
     finally:
         hist = sim.get_history()
         t_arr = hist["t"]
@@ -253,12 +249,15 @@ def mainKepler():
                 "saved_points": len(output_list),
                 "total_recorded_points": total_points,
                 "requested_max_points": max_save,
-                "destroyed": bool(sim.destroyed)
+                "destroyed": bool(sim.destroyed),
+                "central_body": "Earth"
             },
             "data": output_list
         }
 
         return output_data
+
+
 # -------------------------
 # MAIN
 # -------------------------
