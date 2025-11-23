@@ -189,7 +189,7 @@ class TrajectoryComputer:
             "r": np.array(self.r_history),
         }
 
-def mainKepler():
+def mainKepler2D():
         # Orbital parameters for an asteroid near Earth
     # Using a highly elliptical orbit to simulate an incoming object or eccentric satellite
     a_axis = 50000e3  # 50,000 km semi-major axis
@@ -226,11 +226,8 @@ def mainKepler():
             print("No history to save.")
             output_list = []
         else:
-            # Evenly spaced indices from 0 .. total_points-1 (inclusive)
             indices = np.linspace(0, total_points - 1, num=points_to_save)
-            # round to nearest integer index and convert to int
             indices = np.round(indices).astype(int)
-            # safety: ensure indices are within bounds
             indices = np.clip(indices, 0, total_points - 1)
 
             # Build list of JSON-friendly dicts (preserves temporal order)
@@ -262,4 +259,4 @@ def mainKepler():
 # MAIN
 # -------------------------
 if __name__ == "__main__":
-    mainKepler()
+    mainKepler2D()

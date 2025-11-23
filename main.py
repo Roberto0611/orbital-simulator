@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import numpy as np
-from simulator import mainKepler
+from simulator import mainKepler2D
 
 app = FastAPI(title="Orbital Simulator API")
 
@@ -9,9 +9,9 @@ app = FastAPI(title="Orbital Simulator API")
 def home():
     return {"message": "API FUNCIONANDO"}
 
-@app.get("/datos")
+@app.get("/datos2D")
 def get_simulation_data():
-    output_data = mainKepler()
+    output_data = mainKepler2D()
     return output_data
 
 @app.get("/health")
