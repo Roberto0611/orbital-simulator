@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle
 import math
-import json
 from decimal import Decimal
 from scipy.special import jv
 
