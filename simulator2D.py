@@ -6,22 +6,13 @@ import math
 from decimal import Decimal
 from scipy.special import jv
 
-# -------------------------
-# Constants (SI Units)
-# -------------------------
 G_CONSTANT = 6.67430e-11
 MASS_EARTH = 5.972e24       # kg
 RADIUS_EARTH = 6.371e6      # Meters (approx 6,371 km)
 GEO_RADIUS = 42164e3        # Geostationary orbit radius (approx 42,164 km)
+METEOR_MASS = 1.0e12        # kg (approx 100 tons)
+METEOR_RADIUS = 502.5       # Meters (approx 10m diameter)
 
-# --- NEW METEORITE CONSTANTS ---
-METEOR_MASS = 1.0e12         # kg (approx 100 tons)
-METEOR_RADIUS = 502.5         # Meters (approx 10m diameter)
-# -------------------------------
-
-# -------------------------
-# Drag class
-# -------------------------
 class DragForce:
     """
     Tangential + radial drag with exponential coefficient decay.
@@ -41,11 +32,7 @@ class DragForce:
         r = np.array(r_vec, dtype=float)
         speed = np.linalg.norm(v)
         r_norm = np.linalg.norm(r)
-
-        # Tangential Drag
         a_tangential = -c_t * v
-
-        # Radial Drag
         a_radial = np.zeros(2)
         if r_norm > 0 and c_r != 0.0:
             r_hat = r / r_norm
@@ -53,9 +40,6 @@ class DragForce:
 
         return a_tangential + a_radial
 
-# -------------------------
-# Numerical integrator
-# -------------------------
 class PhysicsService:
     def __init__(self, G_val, Mass_primary, mass_secondary):
         self.G = Decimal(str(G_val))
@@ -87,16 +71,12 @@ class BesselAnomalySolver:
             summation += term
         return M + (Decimal(2) * summation)
 
-
 class TrajectoryComputer:
     def __init__(self, physics_service: PhysicsService, solver_service: BesselAnomalySolver, drag: DragForce):
         self.physics = physics_service
         self.solver = solver_service
         self.drag = drag
-        
-        # Store meteor size for collision detection
         self.object_radius = 0.0 
-
         self.t_history = []
         self.x_history = []
         self.y_history = []
@@ -127,7 +107,6 @@ class TrajectoryComputer:
         self.y_history = []
         self.r_history = []
         self._append_history_point()
-    # ------------------------------------------------------------------------
 
     def set_initial_from_orbital_elements(self, a, b, start_true_anomaly=0.0):
         a = float(a)
@@ -192,21 +171,14 @@ class TrajectoryComputer:
     def step(self, dt):
         if self.destroyed:
             return
-
-        # Adaptive substeps
         x, y, vx, vy = self.state
         r = math.hypot(x, y)
-
-        # Far from Earth → easy smooth orbit → fewer substeps needed
         if r > 2 * RADIUS_EARTH:
             substeps = 5
-        # Medium zone
         elif r > 1.2 * RADIUS_EARTH:
             substeps = 10
-        # Near Earth → fast dynamics → keep accuracy high
         else:
             substeps = 40
-
         dt_sub = dt / substeps
 
         for _ in range(substeps):
@@ -222,8 +194,6 @@ class TrajectoryComputer:
 
         # Save only ONE point per dt step
         self._append_history_point()
-
-
 
     def get_history(self):
         return {
@@ -296,26 +266,14 @@ class TrajectoryComputer:
 #         plt.show()
 
 def mainKepler2D():
-    # 1. Define Physics with Meteor Mass
     drag = DragForce(c_t0=4.0e-5, c_r0=5e-8, decay=1e-5)
-    
-    # Note: Passing METEOR_MASS here
     physics = PhysicsService(G_CONSTANT, MASS_EARTH, METEOR_MASS) 
-    
     solver = BesselAnomalySolver(max_iterations=40)
     sim = TrajectoryComputer(physics, solver, drag)
-
-    # 2. Set the Meteor Size (for collision detection)
     sim.set_object_radius(METEOR_RADIUS)
-
-    # 3. Define Initial State Vectors (Position and Velocity)
     initial_position = [3e7+5e7, -3.5e7]
     initial_velocity = [-4949.74, 4949.747]
-
-    # Use the new method to set state directly
     sim.set_initial_state_vectors(initial_position, initial_velocity)
-
-    # Time step: 60 seconds per step
     dt = 10
 
     try:
@@ -365,8 +323,5 @@ def mainKepler2D():
 
         return output_data
 
-# -------------------------
-# MAIN
-# -------------------------
 if __name__ == "__main__":
     mainKepler2D()

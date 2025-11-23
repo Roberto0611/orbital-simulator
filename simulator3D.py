@@ -7,22 +7,13 @@ import json
 from decimal import Decimal
 from scipy.special import jv
 
-# -------------------------
-# Constants (SI Units)
-# -------------------------
 G_CONSTANT = 6.67430e-11
 MASS_EARTH = 5.972e24       # kg
 RADIUS_EARTH = 6.371e6      # Meters (approx 6,371 km)
 GEO_RADIUS = 42164e3        # Geostationary orbit radius (approx 42,164 km)
+METEOR_MASS = 1.0e12        # kg (approx 100 tons)
+METEOR_RADIUS = 502.5       # Meters (approx 10m diameter -> actually 502.5m radius here)
 
-# --- NEW METEORITE CONSTANTS ---
-METEOR_MASS = 1.0e12         # kg (approx 100 tons)
-METEOR_RADIUS = 502.5        # Meters (approx 10m diameter -> actually 502.5m radius here)
-# -------------------------------
-
-# -------------------------
-# Drag class (3D)
-# -------------------------
 class DragForce:
     """
     Tangential + radial drag with exponential coefficient decay (3D).
@@ -42,11 +33,7 @@ class DragForce:
         r = np.array(r_vec, dtype=float)
         speed = np.linalg.norm(v)
         r_norm = np.linalg.norm(r)
-
-        # Tangential Drag (opposite to velocity)
         a_tangential = -c_t * v
-
-        # Radial Drag (along -r_hat, scaled by speed)
         a_radial = np.zeros(3)
         if r_norm > 0 and c_r != 0.0:
             r_hat = r / r_norm
@@ -150,14 +137,11 @@ class TrajectoryComputer:
         b = float(b)
         e = math.sqrt(max(0.0, a**2 - b**2)) / a
         theta = float(start_true_anomaly)
-
         r_mag = a * (1 - e**2) / (1 + e * math.cos(theta))
         r_pf = np.array([r_mag * math.cos(theta), r_mag * math.sin(theta), 0.0], dtype=float)
-
         mu = float(self.physics.G * (self.physics.M + self.physics.m))
         h = math.sqrt(mu * a * (1 - e**2))
         v_pf = (mu / h) * np.array([-math.sin(theta), e + math.cos(theta), 0.0], dtype=float)
-
         i = math.radians(incl_deg)
         Omega = math.radians(raan_deg)
         omega = math.radians(argp_deg)
@@ -171,13 +155,10 @@ class TrajectoryComputer:
             return np.array([[1.0,0.0,0.0],[0.0,c,-s],[0.0,s,c]])
 
         R = Rz(Omega) @ Rx(i) @ Rz(omega)
-
         r_eci = R @ r_pf
         v_eci = R @ v_pf
-
         x0, y0, z0 = r_eci
         vx0, vy0, vz0 = v_eci
-
         self.state = np.array([x0, y0, z0, vx0, vy0, vz0], dtype=float)
         self.t = 0.0
         self._append_history_point()
@@ -210,7 +191,6 @@ class TrajectoryComputer:
         return a_grav + a_drag
 
     def _rk4_no_history(self, dt):
-    # Same as rk4_step but WITHOUT storing history every substep
         s = self.state.copy()
         t_local = self.t
 
@@ -231,29 +211,19 @@ class TrajectoryComputer:
     def step(self, dt):
         if self.destroyed:
             return
-
-        # ---------------------------
-        # ADAPTIVE SUBSTEP OPTIMIZATION (3D)
-        # ---------------------------
         x, y, z, vx, vy, vz = self.state
         r = math.sqrt(x*x + y*y + z*z)
-
-        # Far from Earth → smooth motion → very few substeps needed
         if r > 2 * RADIUS_EARTH:
             substeps = 5
-
-        # Medium zone
         elif r > 1.2 * RADIUS_EARTH:
             substeps = 10
-
-        # Near Earth → high curvature, drag strongest
         else:
             substeps = 40
 
         dt_sub = dt / substeps
 
         for _ in range(substeps):
-            self._rk4_no_history(dt_sub)   # <-- optimized RK4 (below)
+            self._rk4_no_history(dt_sub)
 
             x, y, z, vx, vy, vz = self.state
             r = math.sqrt(x*x + y*y + z*z)
@@ -263,7 +233,6 @@ class TrajectoryComputer:
                 self.destroyed = True
                 return
 
-        # Only store history ONCE per user-step
         self.t_history.append(self.t)
         self.x_history.append(self.state[0])
         self.y_history.append(self.state[1])
@@ -348,26 +317,14 @@ class TrajectoryComputer:
 #         plt.show()
 
 def mainKepler3D():
-    # 1. Define Physics with Meteor Mass
     drag = DragForce(c_t0=4.0e-5, c_r0=5e-8, decay=1e-5)
-    
     physics = PhysicsService(G_CONSTANT, MASS_EARTH, METEOR_MASS) 
-    
     solver = BesselAnomalySolver(max_iterations=40)
     sim = TrajectoryComputer(physics, solver, drag, asteroid_mass=METEOR_MASS, asteroid_radius=METEOR_RADIUS)
-
-    # 2. Set the Meteor Size (redundant if passed in init, but keeping for alignment with snippet logic)
     sim.set_object_radius(METEOR_RADIUS)
-
-    # 3. Define Initial State Vectors (Position and Velocity)
-    # Converting 2D snippet vectors to 3D (z=0)
     initial_position = [3e7+5e7, -3.5e7, -3.5e7]
     initial_velocity = [-4330.12, 4330.12, 4330.12]
-
-    # Use the new method to set state directly
     sim.set_initial_state_vectors(initial_position, initial_velocity)
-
-    # Time step: 10 seconds per step (from snippet)
     dt = 10.0
 
     try:
