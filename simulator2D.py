@@ -15,6 +15,11 @@ MASS_EARTH = 5.972e24       # kg
 RADIUS_EARTH = 6.371e6      # Meters (approx 6,371 km)
 GEO_RADIUS = 42164e3        # Geostationary orbit radius (approx 42,164 km)
 
+# --- NEW METEORITE CONSTANTS ---
+METEOR_MASS = 1.0e12         # kg (approx 100 tons)
+METEOR_RADIUS = 502.5         # Meters (approx 10m diameter)
+# -------------------------------
+
 # -------------------------
 # Drag class
 # -------------------------
@@ -89,6 +94,9 @@ class TrajectoryComputer:
         self.physics = physics_service
         self.solver = solver_service
         self.drag = drag
+        
+        # Store meteor size for collision detection
+        self.object_radius = 0.0 
 
         self.t_history = []
         self.x_history = []
@@ -97,7 +105,30 @@ class TrajectoryComputer:
 
         self.state = None
         self.t = 0.0
-        self.destroyed = False     # <-- NEW FLAG
+        self.destroyed = False
+
+    def set_object_radius(self, radius):
+        self.object_radius = float(radius)
+
+    # --- NEW METHOD: Initialize with explicit Position and Velocity vectors ---
+    def set_initial_state_vectors(self, r_vec, v_vec):
+        """
+        Manually set the initial state with vectors.
+        r_vec: [x, y] (meters)
+        v_vec: [vx, vy] (m/s)
+        """
+        x0, y0 = r_vec
+        vx0, vy0 = v_vec
+        
+        self.state = np.array([x0, y0, vx0, vy0], dtype=float)
+        self.t = 0.0
+        # Clear previous history if any
+        self.t_history = []
+        self.x_history = []
+        self.y_history = []
+        self.r_history = []
+        self._append_history_point()
+    # ------------------------------------------------------------------------
 
     def set_initial_from_orbital_elements(self, a, b, start_true_anomaly=0.0):
         a = float(a)
@@ -157,13 +188,26 @@ class TrajectoryComputer:
 
         self.state = s + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
         self.t += dt
-        self._append_history_point()
+
 
     def step(self, dt):
         if self.destroyed:
             return
 
-        substeps = 50
+        # Adaptive substeps
+        x, y, vx, vy = self.state
+        r = math.hypot(x, y)
+
+        # Far from Earth → easy smooth orbit → fewer substeps needed
+        if r > 2 * RADIUS_EARTH:
+            substeps = 5
+        # Medium zone
+        elif r > 1.2 * RADIUS_EARTH:
+            substeps = 10
+        # Near Earth → fast dynamics → keep accuracy high
+        else:
+            substeps = 40
+
         dt_sub = dt / substeps
 
         for _ in range(substeps):
@@ -172,13 +216,14 @@ class TrajectoryComputer:
             x, y, vx, vy = self.state
             r = math.hypot(x, y)
 
-            if r <= RADIUS_EARTH:
+            if r <= (RADIUS_EARTH + self.object_radius):
                 print("Meteor collided with Earth. Object destroyed.")
                 self.destroyed = True
                 return
 
-        # Save one snapshot per real simulation step
+        # Save only ONE point per dt step
         self._append_history_point()
+
 
 
     def get_history(self):
@@ -189,26 +234,96 @@ class TrajectoryComputer:
             "r": np.array(self.r_history),
         }
 
+# # -------------------------
+# # Animation Service
+# # -------------------------
+# class AnimationService:
+#     def __init__(self, simulator: TrajectoryComputer, dt=60.0):
+#         self.sim = simulator
+#         self.dt = float(dt)
+
+#         self.fig, self.ax = plt.subplots(figsize=(10, 10))
+
+#         # Earth Patch
+#         self.earth_patch = Circle((0, 0), RADIUS_EARTH, color='dodgerblue', zorder=2, label='Earth')
+#         self.ax.add_patch(self.earth_patch)
+
+#         # Reference Orbit (Geostationary)
+#         orbit_ref = Circle((0, 0), GEO_RADIUS, color='gray', fill=False, linestyle='--', alpha=0.3, label='GEO')
+#         self.ax.add_patch(orbit_ref)
+
+#         self.marker, = self.ax.plot([], [], 'ro', markersize=5, zorder=5)
+#         self.trail, = self.ax.plot([], [], 'b-', alpha=0.5, linewidth=1, zorder=4)
+
+#         # Set limits based on GEO radius
+#         self.limit = GEO_RADIUS * 2.0
+#         self.ax.set_xlim(-self.limit, self.limit)
+#         self.ax.set_ylim(-self.limit, self.limit)
+#         self.ax.set_aspect('equal')
+#         self.ax.grid(True, linestyle=':', alpha=0.6)
+#         self.ax.legend(loc='upper right')
+
+#         self.info_text = self.ax.text(0.02, 0.95, '', transform=self.ax.transAxes, verticalalignment='top')
+
+#     def update(self, frame):
+#         for _ in range(5):
+#             self.sim.step(self.dt)
+
+#         hist = self.sim.get_history()
+#         x = hist["x"][-1]
+#         y = hist["y"][-1]
+#         r = hist["r"][-1]
+#         t = hist["t"][-1]
+
+#         # ----------------------------
+#         # Destroyed? Hide & stop.
+#         # ----------------------------
+#         if self.sim.destroyed:
+#             self.marker.set_data([], [])
+#             self.info_text.set_text("Meteor destroyed (impacted Earth).")
+#             return self.marker, self.trail, self.info_text, self.earth_patch
+
+#         self.marker.set_data([x], [y])
+#         self.trail.set_data(hist["x"], hist["y"])
+
+#         hours = t / 3600.0
+#         dist_km = r / 1000.0
+#         self.info_text.set_text(f"Time: {hours:.2f} hours\nDist: {dist_km:.1f} km")
+
+#         return self.marker, self.trail, self.info_text, self.earth_patch
+
+#     def start(self, frames=20000, interval=20):
+#         ani = FuncAnimation(self.fig, self.update, frames=frames, interval=interval, blit=False, repeat=False)
+#         plt.show()
+
 def mainKepler2D():
-        # Orbital parameters for an asteroid near Earth
-    # Using a highly elliptical orbit to simulate an incoming object or eccentric satellite
-    a_axis = 50000e3  # 50,000 km semi-major axis
-    b_axis = 30000e3  # 30,000 km semi-minor axis
-
-    drag = DragForce(c_t0=1.5e-6, c_r0=0.0, decay=0.0)
-
-    physics = PhysicsService(G_CONSTANT, MASS_EARTH, 0.0)
+    # 1. Define Physics with Meteor Mass
+    drag = DragForce(c_t0=4.0e-5, c_r0=5e-8, decay=1e-5)
+    
+    # Note: Passing METEOR_MASS here
+    physics = PhysicsService(G_CONSTANT, MASS_EARTH, METEOR_MASS) 
+    
     solver = BesselAnomalySolver(max_iterations=40)
     sim = TrajectoryComputer(physics, solver, drag)
-    sim.set_initial_from_orbital_elements(a_axis, b_axis, start_true_anomaly=0.0)
+
+    # 2. Set the Meteor Size (for collision detection)
+    sim.set_object_radius(METEOR_RADIUS)
+
+    # 3. Define Initial State Vectors (Position and Velocity)
+    initial_position = [3e7+5e7, -3.5e7]
+    initial_velocity = [-4949.74, 4949.747]
+
+    # Use the new method to set state directly
+    sim.set_initial_state_vectors(initial_position, initial_velocity)
 
     # Time step: 60 seconds per step
-    dt = 120.0
+    dt = 10
 
     try:
-        for step in range(0, 2000):
+        for step in range(5000):
             sim.step(dt)
             if sim.destroyed:
+                print(f"Simulation ended at step {step} due to destruction.")
                 break
     finally:
         hist = sim.get_history()
@@ -218,19 +333,16 @@ def mainKepler2D():
         r_arr = hist["r"]
 
         total_points = len(t_arr)
-        # Desired maximum points to save
         max_save = 1000
         points_to_save = min(max_save, total_points)
 
         if total_points == 0:
             print("No history to save.")
-            output_list = []
         else:
             indices = np.linspace(0, total_points - 1, num=points_to_save)
             indices = np.round(indices).astype(int)
             indices = np.clip(indices, 0, total_points - 1)
 
-            # Build list of JSON-friendly dicts (preserves temporal order)
             output_list = []
             for idx in indices:
                 output_list.append({
@@ -240,20 +352,19 @@ def mainKepler2D():
                     "r_m": float(r_arr[idx])
                 })
 
-        # Add small metadata wrapper so the file is self-describing
         output_data = {
             "metadata": {
-                "saved_points": len(output_list),
+                "saved_points": len(output_list) if 'output_list' in locals() else 0,
                 "total_recorded_points": total_points,
-                "requested_max_points": max_save,
+                "meteor_mass_kg": METEOR_MASS,
+                "meteor_radius_m": METEOR_RADIUS,
                 "destroyed": bool(sim.destroyed),
                 "central_body": "Earth"
             },
-            "data": output_list
+            "data": output_list if 'output_list' in locals() else []
         }
 
         return output_data
-
 
 # -------------------------
 # MAIN
