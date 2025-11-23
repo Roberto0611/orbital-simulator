@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from matplotlib.patches import Circle
 from mpl_toolkits.mplot3d import Axes3D
 import math
 import json
@@ -16,8 +15,13 @@ MASS_EARTH = 5.972e24       # kg
 RADIUS_EARTH = 6.371e6      # Meters (approx 6,371 km)
 GEO_RADIUS = 42164e3        # Geostationary orbit radius (approx 42,164 km)
 
+# --- NEW METEORITE CONSTANTS ---
+METEOR_MASS = 1.0e12         # kg (approx 100 tons)
+METEOR_RADIUS = 502.5        # Meters (approx 10m diameter -> actually 502.5m radius here)
+# -------------------------------
+
 # -------------------------
-# Drag class (now 3D)
+# Drag class (3D)
 # -------------------------
 class DragForce:
     """
@@ -55,7 +59,6 @@ class DragForce:
 # -------------------------
 class PhysicsService:
     def __init__(self, G_val, Mass_primary, mass_secondary):
-        # Keep Decimal for any long-precision parts, but use floats for the integrator
         self.G = Decimal(str(G_val))
         self.M = Decimal(str(Mass_primary))
         self.m = Decimal(str(mass_secondary))
@@ -88,24 +91,12 @@ class BesselAnomalySolver:
 
 class TrajectoryComputer:
     def __init__(self, physics_service: PhysicsService, solver_service: BesselAnomalySolver, drag: DragForce, asteroid_mass=1e9, asteroid_radius=50.0):
+        self.physics = physics_service
+        self.solver = solver_service
+        self.drag = drag
+        
         self.asteroid_mass = float(asteroid_mass)
         self.asteroid_radius = float(asteroid_radius)
-        # original code below
-        self.physics = physics_service
-        self.solver = solver_service
-        self.drag = drag
-
-        self.t_history = []
-        self.x_history = []
-        self.y_history = []
-        self.r_history = []
-
-        self.state = None
-        self.t = 0.0
-        self.destroyed = False
-        self.physics = physics_service
-        self.solver = solver_service
-        self.drag = drag
 
         self.t_history = []
         self.x_history = []
@@ -120,40 +111,57 @@ class TrajectoryComputer:
         self.t = 0.0
         self.destroyed = False
 
+    def set_object_radius(self, radius):
+        self.asteroid_radius = float(radius)
+
+    def set_initial_state_vectors(self, r_vec, v_vec):
+        """
+        Manually set the initial state with vectors.
+        r_vec: [x, y, z] (meters) - if 2D provided, z=0 assumed
+        v_vec: [vx, vy, vz] (m/s) - if 2D provided, vz=0 assumed
+        """
+        # Handle 2D inputs by appending 0 for Z
+        if len(r_vec) == 2:
+            r_vec = list(r_vec) + [0.0]
+        if len(v_vec) == 2:
+            v_vec = list(v_vec) + [0.0]
+
+        x0, y0, z0 = r_vec
+        vx0, vy0, vz0 = v_vec
+        
+        self.state = np.array([x0, y0, z0, vx0, vy0, vz0], dtype=float)
+        self.t = 0.0
+        
+        # Clear history
+        self.t_history = []
+        self.x_history = []
+        self.y_history = []
+        self.z_history = []
+        self.r_history = []
+        self.vx_history = []
+        self.vy_history = []
+        self.vz_history = []
+        
+        self._append_history_point()
+
     def set_initial_from_orbital_elements(self, a, b, start_true_anomaly=0.0,
                                           incl_deg=0.0, raan_deg=0.0, argp_deg=0.0):
-        """
-        Set initial state from orbital elements. Uses perifocal -> ECI transform to allow 3D.
-        a, b: semi-major and semi-minor axes (meters)
-        start_true_anomaly: theta (radians)
-        incl_deg, raan_deg, argp_deg: inclination, RAAN, argument of periapsis in degrees
-        """
         a = float(a)
         b = float(b)
         e = math.sqrt(max(0.0, a**2 - b**2)) / a
         theta = float(start_true_anomaly)
 
-        # radial distance
         r_mag = a * (1 - e**2) / (1 + e * math.cos(theta))
-
-        # Perifocal position
         r_pf = np.array([r_mag * math.cos(theta), r_mag * math.sin(theta), 0.0], dtype=float)
 
-        # Standard gravitational parameter (float)
         mu = float(self.physics.G * (self.physics.M + self.physics.m))
-
-        # Specific angular momentum magnitude
         h = math.sqrt(mu * a * (1 - e**2))
-
-        # Perifocal velocity components (classical formula)
         v_pf = (mu / h) * np.array([-math.sin(theta), e + math.cos(theta), 0.0], dtype=float)
 
-        # Rotation from perifocal to ECI: r_eci = Rz(Omega) * Rx(i) * Rz(omega) * r_pf
         i = math.radians(incl_deg)
         Omega = math.radians(raan_deg)
         omega = math.radians(argp_deg)
 
-        # Rotation matrices
         def Rz(angle):
             c = math.cos(angle); s = math.sin(angle)
             return np.array([[c, -s, 0.0],[s, c, 0.0],[0.0,0.0,1.0]])
@@ -201,7 +209,8 @@ class TrajectoryComputer:
         a_drag = self.drag.acceleration(r_vec, v_vec, t)
         return a_grav + a_drag
 
-    def rk4_step(self, dt):
+    def _rk4_no_history(self, dt):
+    # Same as rk4_step but WITHOUT storing history every substep
         s = self.state.copy()
         t_local = self.t
 
@@ -217,18 +226,34 @@ class TrajectoryComputer:
 
         self.state = s + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
         self.t += dt
-        self._append_history_point()
+
 
     def step(self, dt):
         if self.destroyed:
             return
 
-        # Substepping for stability
-        substeps = 50
+        # ---------------------------
+        # ADAPTIVE SUBSTEP OPTIMIZATION (3D)
+        # ---------------------------
+        x, y, z, vx, vy, vz = self.state
+        r = math.sqrt(x*x + y*y + z*z)
+
+        # Far from Earth → smooth motion → very few substeps needed
+        if r > 2 * RADIUS_EARTH:
+            substeps = 5
+
+        # Medium zone
+        elif r > 1.2 * RADIUS_EARTH:
+            substeps = 10
+
+        # Near Earth → high curvature, drag strongest
+        else:
+            substeps = 40
+
         dt_sub = dt / substeps
 
         for _ in range(substeps):
-            self.rk4_step(dt_sub)
+            self._rk4_no_history(dt_sub)   # <-- optimized RK4 (below)
 
             x, y, z, vx, vy, vz = self.state
             r = math.sqrt(x*x + y*y + z*z)
@@ -238,7 +263,16 @@ class TrajectoryComputer:
                 self.destroyed = True
                 return
 
-        # Save one snapshot per real simulation step (already done in rk4)
+        # Only store history ONCE per user-step
+        self.t_history.append(self.t)
+        self.x_history.append(self.state[0])
+        self.y_history.append(self.state[1])
+        self.z_history.append(self.state[2])
+        self.r_history.append(r)
+        self.vx_history.append(self.state[3])
+        self.vy_history.append(self.state[4])
+        self.vz_history.append(self.state[5])
+
 
     def get_history(self):
         return {
@@ -252,33 +286,93 @@ class TrajectoryComputer:
             "vz": np.array(self.vz_history),
         }
 
+# -------------------------
+# Animation Service (3D)
+# -------------------------
+# class AnimationService:
+#     def __init__(self, simulator: TrajectoryComputer, dt=60.0):
+#         self.sim = simulator
+#         self.dt = float(dt)
+
+#         self.fig = plt.figure(figsize=(10, 10))
+#         self.ax = self.fig.add_subplot(111, projection='3d')
+
+#         # Earth sphere
+#         u = np.linspace(0, 2 * np.pi, 40)
+#         v = np.linspace(0, np.pi, 20)
+#         x_s = RADIUS_EARTH * np.outer(np.cos(u), np.sin(v))
+#         y_s = RADIUS_EARTH * np.outer(np.sin(u), np.sin(v))
+#         z_s = RADIUS_EARTH * np.outer(np.ones_like(u), np.cos(v))
+#         self.ax.plot_surface(x_s, y_s, z_s, color='dodgerblue', alpha=0.6)
+
+#         max_lim = GEO_RADIUS * 2.0
+#         self.ax.set_xlim(-max_lim, max_lim)
+#         self.ax.set_ylim(-max_lim, max_lim)
+#         self.ax.set_zlim(-max_lim, max_lim)
+#         self.ax.set_box_aspect([1,1,1])
+
+#         self.trail_line, = self.ax.plot([], [], [], 'b-', alpha=0.6)
+#         self.marker_line, = self.ax.plot([], [], [], 'ro')
+#         self.info_text = self.ax.text2D(0.02, 0.95, '', transform=self.ax.transAxes)
+
+#     def update(self, frame):
+#         for _ in range(5):
+#             self.sim.step(self.dt)
+
+#         hist = self.sim.get_history()
+#         x = hist["x"][-1]
+#         y = hist["y"][-1]
+#         z = hist["z"][-1]
+#         r = hist["r"][-1]
+#         t = hist["t"][-1]
+
+#         if self.sim.destroyed:
+#             self.marker_line.set_data([], [])
+#             self.marker_line.set_3d_properties([])
+#             self.info_text.set_text("Meteor destroyed (impacted Earth).")
+#             return self.marker_line, self.trail_line, self.info_text
+
+#         self.marker_line.set_data([x], [y])
+#         self.marker_line.set_3d_properties([z])
+#         self.trail_line.set_data(hist["x"], hist["y"])
+#         self.trail_line.set_3d_properties(hist["z"])
+
+#         hours = t / 3600.0
+#         dist_km = r / 1000.0
+#         self.info_text.set_text(f"Time: {hours:.2f} hours\nDist: {dist_km:.1f} km")
+
+#         return self.marker_line, self.trail_line, self.info_text
+
+#     def start(self, frames=20000, interval=20):
+#         ani = FuncAnimation(self.fig, self.update, frames=frames, interval=interval, blit=False, repeat=False)
+#         plt.show()
+
 def mainKepler3D():
-    # Orbital parameters for an asteroid near Earth
-    a_axis = 50000e3  # 50,000 km semi-major axis
-    b_axis = 30000e3  # 30,000 km semi-minor axis
-
-    # Provide some inclination and orientation so it's actually 3D
-    inclination_deg = 45.0
-    raan_deg = 10.0
-    argp_deg = 20.0
-
-    drag = DragForce(c_t0=1.5e-6, c_r0=0.0, decay=0.0)
-
-    physics = PhysicsService(G_CONSTANT, MASS_EARTH, 0.0)
+    # 1. Define Physics with Meteor Mass
+    drag = DragForce(c_t0=4.0e-5, c_r0=5e-8, decay=1e-5)
+    
+    physics = PhysicsService(G_CONSTANT, MASS_EARTH, METEOR_MASS) 
+    
     solver = BesselAnomalySolver(max_iterations=40)
-    sim = TrajectoryComputer(physics, solver, drag, asteroid_mass=1e9, asteroid_radius=1000.0)
+    sim = TrajectoryComputer(physics, solver, drag, asteroid_mass=METEOR_MASS, asteroid_radius=METEOR_RADIUS)
 
-    sim.set_initial_from_orbital_elements(a_axis, b_axis, start_true_anomaly=0.0,
-                                         incl_deg=inclination_deg, raan_deg=raan_deg, argp_deg=argp_deg)
+    # 2. Set the Meteor Size (redundant if passed in init, but keeping for alignment with snippet logic)
+    sim.set_object_radius(METEOR_RADIUS)
 
-    # Time step: 120 seconds per high-level step
-    dt = 120.0
+    # 3. Define Initial State Vectors (Position and Velocity)
+    # Converting 2D snippet vectors to 3D (z=0)
+    initial_position = [3e7+5e7, -3.5e7, -3.5e7]
+    initial_velocity = [-4330.12, 4330.12, 4330.12]
+
+    # Use the new method to set state directly
+    sim.set_initial_state_vectors(initial_position, initial_velocity)
+
+    # Time step: 10 seconds per step (from snippet)
+    dt = 10.0
 
     try:
-        for step in range(0, 2000):
+        while not sim.destroyed:
             sim.step(dt)
-            if sim.destroyed:
-                break
     finally:
         hist = sim.get_history()
         t_arr = hist["t"]
@@ -319,14 +413,10 @@ def mainKepler3D():
             "metadata": {
                 "saved_points": len(output_list),
                 "total_recorded_points": total_points,
-                "requested_max_points": max_save,
+                "meteor_mass_kg": METEOR_MASS,
+                "meteor_radius_m": METEOR_RADIUS,
                 "destroyed": bool(sim.destroyed),
-                "asteroid_mass_kg": sim.asteroid_mass,
-                "asteroid_radius_m": sim.asteroid_radius,
-                "central_body": "Earth",
-                "inclination_deg": inclination_deg,
-                "raan_deg": raan_deg,
-                "argp_deg": argp_deg
+                "central_body": "Earth"
             },
             "data": output_list
         }
@@ -334,7 +424,7 @@ def mainKepler3D():
         return output_data
 
 # -------------------------
-# MAIN (3D output JSON)
+# MAIN
 # -------------------------
 if __name__ == "__main__":
     mainKepler3D()
