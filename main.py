@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import numpy as np
-from simulator import mainKepler2D
+from simulator2D import mainKepler2D
 
 app = FastAPI(title="Orbital Simulator API")
 
